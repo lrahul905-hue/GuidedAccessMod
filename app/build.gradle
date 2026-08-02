@@ -1,0 +1,18 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'com.rahul.guidedaccess'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.rahul.guidedaccess"
+        minSdk 29
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+}
+
+dependencies {
+    compileOnly 'de.robv.android.xposed:api:82'
+}
