@@ -3,12 +3,12 @@ package com.rahul.guidedaccess;
 import android.view.KeyEvent;
 import de.robv.android.xposed.IXposedHookLoadPackage;
 import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
 public class GuidedAccessHook implements IXposedHookLoadPackage {
 
-    // Ab IPC ki zarurat nahi, simple boolean perfect kaam karega
     private static boolean isGuidedAccessActive = false;
     private static boolean isVolUpPressed = false;
     private static boolean isVolDownPressed = false;
@@ -17,55 +17,68 @@ public class GuidedAccessHook implements IXposedHookLoadPackage {
     @Override
     public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
         
-        // Kewal System Framework ('android') ko target kar rahe hain
         if (!lpparam.packageName.equals("android")) return;
 
-        // ==========================================
-        // 1. TRIGGER & GESTURE BLOCKER (PhoneWindowManager)
-        // ==========================================
-        XposedHelpers.findAndHookMethod(
-            "com.android.server.policy.PhoneWindowManager",
-            lpparam.classLoader,
-            "interceptKeyBeforeQueueing",
-            "android.view.KeyEvent",
-            int.class,
-            new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    KeyEvent event = (KeyEvent) param.args[0];
-                    int keyCode = event.getKeyCode();
-                    int action = event.getAction();
+        // Tracker 1: Module Loaded Successfully
+        XposedBridge.log("GuidedAccess [DEBUG]: System Framework Hooked Successfully!");
 
-                    // Volume Keys Tracking
-                    if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-                        isVolUpPressed = (action == KeyEvent.ACTION_DOWN);
-                    } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-                        isVolDownPressed = (action == KeyEvent.ACTION_DOWN);
-                    }
+        // ==========================================
+        // 1. TRIGGER BLOCK (PhoneWindowManager)
+        // ==========================================
+        try {
+            XposedHelpers.findAndHookMethod(
+                "com.android.server.policy.PhoneWindowManager",
+                lpparam.classLoader,
+                "interceptKeyBeforeQueueing",
+                "android.view.KeyEvent",
+                int.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        KeyEvent event = (KeyEvent) param.args[0];
+                        int keyCode = event.getKeyCode();
+                        int action = event.getAction();
 
-                    // Trigger Logic
-                    if (isVolUpPressed && isVolDownPressed) {
-                        long currentTime = System.currentTimeMillis();
-                        if (currentTime - lastTriggerTime > 1000) { 
-                            lastTriggerTime = currentTime;
-                            isGuidedAccessActive = !isGuidedAccessActive; // Toggle mode
-                            param.setResult(0); // Volume change hone se roko
-                            return;
+                        // Track volume key presses
+                        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                            XposedBridge.log("GuidedAccess [DEBUG]: Key Registered - Code: " + keyCode + " Action: " + action);
                         }
-                    }
 
-                    // Block Back Gesture & Recents button actions at framework level
-                    if (isGuidedAccessActive) {
-                        if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_APP_SWITCH) {
-                            param.setResult(0); // Event consume kar lo
+                        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+                            isVolUpPressed = (action == KeyEvent.ACTION_DOWN);
+                        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                            isVolDownPressed = (action == KeyEvent.ACTION_DOWN);
+                        }
+
+                        if (isVolUpPressed && isVolDownPressed) {
+                            long currentTime = System.currentTimeMillis();
+                            if (currentTime - lastTriggerTime > 1000) { 
+                                lastTriggerTime = currentTime;
+                                isGuidedAccessActive = !isGuidedAccessActive;
+                                
+                                // Tracker 2: Did the trigger fire?
+                                XposedBridge.log("GuidedAccess [DEBUG]: MODE TOGGLED! Is Active now? = " + isGuidedAccessActive);
+                                
+                                param.setResult(0); 
+                                return;
+                            }
+                        }
+
+                        if (isGuidedAccessActive) {
+                            if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_APP_SWITCH) {
+                                param.setResult(0);
+                            }
                         }
                     }
                 }
-            }
-        );
+            );
+        } catch (Throwable t) {
+            // Tracker 3: Did PhoneWindowManager fail?
+            XposedBridge.log("GuidedAccess [ERROR]: PhoneWindowManager Hook Failed! " + t.getMessage());
+        }
 
         // ==========================================
-        // 2. TRANSIENT BARS BLOCKER (Edge Swipe Overlays)
+        // 2. TRANSIENT BARS BLOCKER
         // ==========================================
         try {
             XposedHelpers.findAndHookMethod(
@@ -78,18 +91,20 @@ public class GuidedAccessHook implements IXposedHookLoadPackage {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                         if (isGuidedAccessActive) {
-                            param.setResult(null); // Bars popup hone se roko
+                            XposedBridge.log("GuidedAccess [DEBUG]: Blocked Transient Bars (Edge Swipe)");
+                            param.setResult(null);
                         }
                     }
                 }
             );
-        } catch (Throwable t) { }
+        } catch (Throwable t) {
+            XposedBridge.log("GuidedAccess [ERROR]: InsetsPolicy Hook Failed! " + t.getMessage());
+        }
 
         // ==========================================
-        // 3. NOTIFICATION SHADE BLOCKER (StatusBarManagerService)
+        // 3. NOTIFICATION SHADE BLOCKER
         // ==========================================
         try {
-            // Block Notification Pull-down
             XposedHelpers.findAndHookMethod(
                 "com.android.server.statusbar.StatusBarManagerService",
                 lpparam.classLoader,
@@ -98,26 +113,14 @@ public class GuidedAccessHook implements IXposedHookLoadPackage {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                         if (isGuidedAccessActive) {
+                            XposedBridge.log("GuidedAccess [DEBUG]: Blocked Notification Pull-down");
                             param.setResult(null); 
                         }
                     }
                 }
             );
-            
-            // Block Quick Settings Pull-down (Dual safety)
-            XposedHelpers.findAndHookMethod(
-                "com.android.server.statusbar.StatusBarManagerService",
-                lpparam.classLoader,
-                "expandSettingsPanel",
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        if (isGuidedAccessActive) {
-                            param.setResult(null); 
-                        }
-                    }
-                }
-            );
-        } catch (Throwable t) { }
+        } catch (Throwable t) {
+            XposedBridge.log("GuidedAccess [ERROR]: StatusBar Hook Failed! " + t.getMessage());
+        }
     }
 }
