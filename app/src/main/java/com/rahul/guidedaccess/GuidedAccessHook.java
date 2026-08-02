@@ -8,6 +8,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage.LoadPackageParam;
 
 public class GuidedAccessHook implements IXposedHookLoadPackage {
 
+    // Ab IPC ki zarurat nahi, simple boolean perfect kaam karega
     private static boolean isGuidedAccessActive = false;
     private static boolean isVolUpPressed = false;
     private static boolean isVolDownPressed = false;
@@ -16,107 +17,107 @@ public class GuidedAccessHook implements IXposedHookLoadPackage {
     @Override
     public void handleLoadPackage(LoadPackageParam lpparam) throws Throwable {
         
-        // 1. Android System Hook (Volume Toggle & Transient Bars)
-        if (lpparam.packageName.equals("android")) {
-            
-            // Trigger Toggle (Volume Up + Down)
+        // Kewal System Framework ('android') ko target kar rahe hain
+        if (!lpparam.packageName.equals("android")) return;
+
+        // ==========================================
+        // 1. TRIGGER & GESTURE BLOCKER (PhoneWindowManager)
+        // ==========================================
+        XposedHelpers.findAndHookMethod(
+            "com.android.server.policy.PhoneWindowManager",
+            lpparam.classLoader,
+            "interceptKeyBeforeQueueing",
+            "android.view.KeyEvent",
+            int.class,
+            new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                    KeyEvent event = (KeyEvent) param.args[0];
+                    int keyCode = event.getKeyCode();
+                    int action = event.getAction();
+
+                    // Volume Keys Tracking
+                    if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+                        isVolUpPressed = (action == KeyEvent.ACTION_DOWN);
+                    } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                        isVolDownPressed = (action == KeyEvent.ACTION_DOWN);
+                    }
+
+                    // Trigger Logic
+                    if (isVolUpPressed && isVolDownPressed) {
+                        long currentTime = System.currentTimeMillis();
+                        if (currentTime - lastTriggerTime > 1000) { 
+                            lastTriggerTime = currentTime;
+                            isGuidedAccessActive = !isGuidedAccessActive; // Toggle mode
+                            param.setResult(0); // Volume change hone se roko
+                            return;
+                        }
+                    }
+
+                    // Block Back Gesture & Recents button actions at framework level
+                    if (isGuidedAccessActive) {
+                        if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_APP_SWITCH) {
+                            param.setResult(0); // Event consume kar lo
+                        }
+                    }
+                }
+            }
+        );
+
+        // ==========================================
+        // 2. TRANSIENT BARS BLOCKER (Edge Swipe Overlays)
+        // ==========================================
+        try {
             XposedHelpers.findAndHookMethod(
-                "com.android.server.policy.PhoneWindowManager",
+                "com.android.server.wm.InsetsPolicy",
                 lpparam.classLoader,
-                "interceptKeyBeforeDispatching",
-                "android.view.WindowManagerPolicy.WindowState",
-                "android.view.KeyEvent",
+                "showTransient",
                 int.class,
+                boolean.class,
                 new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        KeyEvent event = (KeyEvent) param.args[1];
-                        int keyCode = event.getKeyCode();
-                        int action = event.getAction();
-
-                        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-                            isVolUpPressed = (action == KeyEvent.ACTION_DOWN);
-                        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-                            isVolDownPressed = (action == KeyEvent.ACTION_DOWN);
-                        }
-
-                        if (isVolUpPressed && isVolDownPressed) {
-                            long currentTime = System.currentTimeMillis();
-                            if (currentTime - lastTriggerTime > 500) {
-                                lastTriggerTime = currentTime;
-                                isGuidedAccessActive = !isGuidedAccessActive;
-                                param.setResult(-1L); // Consume events
-                            }
+                        if (isGuidedAccessActive) {
+                            param.setResult(null); // Bars popup hone se roko
                         }
                     }
                 }
             );
+        } catch (Throwable t) { }
 
-            // Block Transient Bars (Edge Swipe in Games)
-            try {
-                XposedHelpers.findAndHookMethod(
-                    "com.android.server.wm.InsetsPolicy",
-                    lpparam.classLoader,
-                    "showTransient",
-                    int.class,
-                    boolean.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            if (isGuidedAccessActive) {
-                                param.setResult(null); // Cancel showing bars
-                            }
+        // ==========================================
+        // 3. NOTIFICATION SHADE BLOCKER (StatusBarManagerService)
+        // ==========================================
+        try {
+            // Block Notification Pull-down
+            XposedHelpers.findAndHookMethod(
+                "com.android.server.statusbar.StatusBarManagerService",
+                lpparam.classLoader,
+                "expandNotificationsPanel",
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (isGuidedAccessActive) {
+                            param.setResult(null); 
                         }
                     }
-                );
-            } catch (Throwable t) {
-                // Ignore if method mapping slightly differs in Voltage OS
-            }
-        }
-
-        // 2. System UI Hook (Notifications & Navigation Gestures)
-        if (lpparam.packageName.equals("com.android.systemui")) {
+                }
+            );
             
-            // Block Notification Shade
-            try {
-                XposedHelpers.findAndHookMethod(
-                    "com.android.systemui.statusbar.CommandQueue",
-                    lpparam.classLoader,
-                    "disable",
-                    int.class,
-                    int.class,
-                    int.class,
-                    boolean.class,
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            if (isGuidedAccessActive) {
-                                int state1 = (int) param.args[1];
-                                state1 |= 0x00010000; // DISABLE_EXPAND flag
-                                param.args[1] = state1;
-                            }
+            // Block Quick Settings Pull-down (Dual safety)
+            XposedHelpers.findAndHookMethod(
+                "com.android.server.statusbar.StatusBarManagerService",
+                lpparam.classLoader,
+                "expandSettingsPanel",
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        if (isGuidedAccessActive) {
+                            param.setResult(null); 
                         }
                     }
-                );
-            } catch (Throwable t) {}
-
-            // Block Back Gestures
-            try {
-                XposedHelpers.findAndHookMethod(
-                    "com.android.systemui.navigationbar.gestural.EdgeBackGestureHandler",
-                    lpparam.classLoader,
-                    "onInputEvent",
-                    "android.view.InputEvent",
-                    new XC_MethodHook() {
-                        @Override
-                        protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                            if (isGuidedAccessActive) {
-                                param.setResult(null);
-                            }
-                        }
-                    }
-                );
-            } catch (Throwable t) {}
-        }
+                }
+            );
+        } catch (Throwable t) { }
     }
 }
