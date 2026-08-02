@@ -1,18 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    
+    <!-- Required Permissions -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.ACCESS_SUPERUSER" />
+
     <application
-        android:label="Guided Access Gaming Mod"
+        android:label="BGMI Game Space"
         android:theme="@android:style/Theme.DeviceDefault.Light">
+        
+        <!-- LSPosed Module Data -->
         <meta-data
             android:name="xposedmodule"
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="Gaming Mod: Blocks edge bars, nav gestures, and notification shade via Vol Up+Down." />
+            android:value="BGMI Pro Gaming Mode with Root Floating Button." />
         <meta-data
             android:name="xposedminversion"
             android:value="82" />
+            
+        <!-- The App Icon/Launcher -->
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- The Floating Button Background Process -->
+        <service android:name=".FloatingButtonService" android:exported="false" />
+            
     </application>
 </manifest>
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-    <uses-permission android:name="android.permission.ACCESS_SUPERUSER" />
